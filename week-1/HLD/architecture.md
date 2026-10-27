@@ -80,7 +80,7 @@ The gateway terminates TLS, applies coarse request-size/rate limits, forwards id
 | Enrollments | (assessment_id, user_id) PK, joined_at, personal_deadline |
 | Questions | question_id PK, assessment_id FK, version, prompt, points, language_limits |
 | TestCases | test_id PK, question_id/version FK, private input/expected-output object keys, visibility, weight |
-| Submissions | submission_id PK, user_id/assessment/question FKs, question_version, language, code_key, received_at, state, attempt_version |
+| Submissions | submission_id PK, user_id/assessment/question FKs, question_version, language, code_key, received_at, state, attempt_version, lease_expires_at nullable |
 | Idempotency | UNIQUE(user_id, assessment_id, key), request_digest, submission_id FK, expires_at |
 | Outbox | event_id PK, submission_id, event_type, published_at nullable |
 | Results | UNIQUE(submission_id, judge_version), verdict, score, counts, runtime, memory |
@@ -90,10 +90,10 @@ PostgreSQL provides transactions and constraints for submissions, outbox events 
 
 ## 7. Submission acceptance and transactional outbox
 
-1. Authenticate, check assessment enrollment and server deadline, validate code size (for example at most 64 KiB), language and request format.
-2. Resolve the idempotency key. The same key and body return the original submission; the same key with different content returns 409. A new intentional attempt uses a new key even if the code is unchanged.
+1. Authenticate and authorize access to this student/assessment; validate request format and bounded code size (for example at most 64 KiB).
+2. Resolve the student-scoped idempotency key before applying new-submission deadline or capacity checks. The same key and body return the original submission, even after its deadline; the same key with different content returns 409. For a new key, check enrollment, server deadline, supported language and admission capacity. A new intentional attempt uses a new key even if the code is unchanged.
 3. Store the code object durably under an immutable identifier. If storage fails, reject rather than claim acceptance.
-4. In one PostgreSQL transaction create the submission, idempotency mapping and outbox event. Concurrent requests are controlled by a uniqueness constraint; any losing request re-reads the winning row. Re-check the deadline inside the acceptance operation.
+4. In one PostgreSQL transaction create the submission, idempotency mapping and outbox event. Concurrent requests are controlled by a uniqueness constraint; any losing request re-reads the winning row. Re-check the deadline for a new acceptance inside the transaction. A concurrent replay resolves the existing key before this check and never creates a second submission.
 5. Return 202 only after commit. If the response is lost, the client safely retries with the same key. Unreferenced code objects from failed transactions are collected later by a lifecycle job after a conservative grace period.
 6. The relay reads committed outbox events, publishes to a replicated durable queue with publisher confirmation, then records publication. A crash can cause duplicate delivery; it cannot silently lose a committed event.
 

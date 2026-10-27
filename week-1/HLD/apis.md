@@ -67,4 +67,6 @@ Errors use `{"error":{"code":"ASSESSMENT_CLOSED","message":"The submission windo
 - 429: rate limited; obey `Retry-After`.
 - 503: not accepted because a required dependency is unavailable; retry with the same key and bounded backoff.
 
+An authorized replay of an already accepted key and identical body returns the original receipt even after the assessment deadline. Deadline and admission checks apply only to new acceptances; a changed body with the same key returns 409.
+
 Clients must retain their submission idempotency key until acceptance is resolved. A timeout is not proof that acceptance failed. Never automatically retry with a new key after a timeout.
